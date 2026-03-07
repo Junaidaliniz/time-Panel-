@@ -7,17 +7,17 @@ const querystring = require("querystring");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ================ SIRF YAHAN CONFIG HAI ================
+// ================ CONFIG ================
 const CONFIG = {
-  baseUrl: "http://www.timesms.net",  // <-- YAHAN URL
-  username: "Junaidaliniz",            // <-- YAHAN USERNAME
-  password: "Junaidaliniz",            // <-- YAHAN PASSWORD
+  baseUrl: "http://www.timesms.net",
+  username: "Junaidaliniz",
+  password: "Junaidaliniz",
   userAgent: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/144 Mobile"
 };
-// ========================================================
 
 let cookies = [];
 let csrfToken = "";
+// ========================================
 
 /* ================= SAFE JSON ================= */
 function safeJSON(text) {
@@ -26,7 +26,7 @@ function safeJSON(text) {
   } catch (e) {
     return { 
       error: "Invalid JSON from server", 
-      raw: text.substring(0, 200) 
+      raw: text.substring(0, 500) // Raw data dikhega debugging ke liye
     };
   }
 }
@@ -42,8 +42,6 @@ function request(method, url, data = null, extraHeaders = {}) {
       "Accept-Encoding": "gzip, deflate",
       "Accept-Language": "en-US,en;q=0.9",
       "Connection": "keep-alive",
-      "Cache-Control": "no-cache",
-      "Pragma": "no-cache",
       ...extraHeaders
     };
 
@@ -56,12 +54,17 @@ function request(method, url, data = null, extraHeaders = {}) {
       headers["Content-Length"] = Buffer.byteLength(data);
     }
 
+    console.log(`🌐 ${method} ${url}`);
+
     const req = lib.request(url, { 
       method, 
       headers,
       timeout: 30000 
     }, res => {
+      console.log(`📥 Response Status: ${res.statusCode}`);
+
       if (res.headers["set-cookie"]) {
+        console.log(`🍪 New Cookies: ${res.headers["set-cookie"].length}`);
         res.headers["set-cookie"].forEach(c => {
           const cookie = c.split(";")[0];
           if (!cookies.includes(cookie)) {
@@ -79,12 +82,20 @@ function request(method, url, data = null, extraHeaders = {}) {
         if (res.headers["content-encoding"] === "gzip") {
           try {
             buffer = zlib.gunzipSync(buffer);
+            console.log("📦 Gzip decompressed");
           } catch (e) {
             console.error("Gzip error:", e.message);
           }
         }
 
-        resolve(buffer.toString());
+        const responseText = buffer.toString();
+        console.log(`📄 Response Length: ${responseText.length} chars`);
+        
+        if (responseText.length < 200) {
+          console.log(`📄 Response Preview: ${responseText}`);
+        }
+        
+        resolve(responseText);
       });
     });
 
@@ -95,7 +106,10 @@ function request(method, url, data = null, extraHeaders = {}) {
       reject(new Error("Request timeout"));
     });
 
-    if (data) req.write(data);
+    if (data) {
+      console.log(`📤 Data: ${data}`);
+      req.write(data);
+    }
     req.end();
   });
 }
@@ -103,28 +117,44 @@ function request(method, url, data = null, extraHeaders = {}) {
 /* ================= LOGIN FUNCTION ================= */
 async function login() {
   try {
-    console.log("🔑 Logging in to timesms.net...");
+    console.log("\n🔑 Logging in to timesms.net...");
     cookies = [];
     csrfToken = "";
 
+    // Step 1: Get login page
+    console.log("📄 Fetching login page...");
     const loginPage = await request("GET", `${CONFIG.baseUrl}/login`);
     
+    // Check if login page is accessible
+    if (loginPage.includes("404") || loginPage.includes("Not Found")) {
+      throw new Error("Login page not found (404)");
+    }
+
+    // Step 2: Extract CSRF token
     const tokenMatch = loginPage.match(/name="_token"\s+value="([^"]+)"/i) ||
-                      loginPage.match(/csrf-token" content="([^"]+)"/i);
+                      loginPage.match(/csrf-token" content="([^"]+)"/i) ||
+                      loginPage.match(/name="csrf_token"\s+value="([^"]+)"/i);
     
     if (tokenMatch) {
       csrfToken = tokenMatch[1];
       console.log("✅ CSRF Token found");
+    } else {
+      console.log("⚠️ No CSRF token found");
     }
 
+    // Step 3: Check for captcha
     let captchaAnswer = 10;
-    const captchaMatch = loginPage.match(/What is (\d+)\s*\+\s*(\d+)/i);
+    const captchaMatch = loginPage.match(/What is (\d+)\s*\+\s*(\d+)/i) ||
+                        loginPage.match(/captcha.*?(\d+).*?\+.*?(\d+)/i);
     
     if (captchaMatch) {
       captchaAnswer = parseInt(captchaMatch[1]) + parseInt(captchaMatch[2]);
       console.log(`✅ Captcha: ${captchaMatch[1]} + ${captchaMatch[2]} = ${captchaAnswer}`);
+    } else {
+      console.log("⚠️ No captcha found");
     }
 
+    // Step 4: Prepare login data
     const loginData = {
       username: CONFIG.username,
       password: CONFIG.password
@@ -139,7 +169,9 @@ async function login() {
     }
 
     const form = querystring.stringify(loginData);
+    console.log("📤 Submitting login form...");
 
+    // Step 5: Submit login
     const response = await request(
       "POST",
       `${CONFIG.baseUrl}/signin`,
@@ -151,14 +183,18 @@ async function login() {
       }
     );
 
+    // Step 6: Check login result
     if (response.includes("dashboard") || 
         response.includes("Welcome") || 
-        response.includes("logout")) {
+        response.includes("logout") ||
+        cookies.length > 0) {
       console.log("✅ Login successful!");
+      console.log(`🍪 Cookies: ${cookies.length} cookies stored`);
       return true;
+    } else {
+      console.log("⚠️ Login may have failed. Response:", response.substring(0, 200));
+      return false;
     }
-
-    return true;
 
   } catch (error) {
     console.error("❌ Login error:", error.message);
@@ -166,74 +202,72 @@ async function login() {
   }
 }
 
-/* ================= FIX NUMBERS DATA ================= */
-function fixNumbers(data) {
-  if (!data || !data.aaData) return data;
+/* ================= FETCH SMS WITH DEBUG ================= */
+async function getSMS() {
+  console.log("\n📨 Fetching SMS...");
 
-  try {
-    data.aaData = data.aaData.map(row => {
-      const cleanField = (field) => {
-        if (!field) return "";
-        return String(field).replace(/<[^>]+>/g, "").trim();
-      };
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-      return [
-        cleanField(row[1]), // Number
-        "",                 // Empty
-        cleanField(row[3]), // Service
-        "Weekly",           // Plan
-        cleanField(row[4]), // Details
-        cleanField(row[7])  // Status
-      ];
-    });
-  } catch (e) {
-    console.error("Error fixing numbers:", e.message);
+  // Try different URL patterns
+  const urls = [
+    // Pattern 1: Simple
+    `${CONFIG.baseUrl}/agent/res/data_smscdr.php?fdate1=${dateStr}%2000:00:00&fdate2=${dateStr}%2023:59:59&iDisplayLength=5000`,
+    
+    // Pattern 2: With all parameters
+    `${CONFIG.baseUrl}/agent/res/data_smscdr.php?` +
+    `fdate1=${dateStr}%2000:00:00&fdate2=${dateStr}%2023:59:59&` +
+    `frange=&fclient=&fnum=&fcli=&fg=0&` +
+    `iDisplayStart=0&iDisplayLength=5000&_=${Date.now()}`,
+    
+    // Pattern 3: Original from Replit
+    `${CONFIG.baseUrl}/agent/res/data_smscdr.php?` +
+    `fdate1=${dateStr}%2000:00:00&fdate2=${dateStr}%2023:59:59&` +
+    `frange=&fclient=&fnum=&fcli=&fgdate=&fgmonth=&fgrange=&fgclient=&fgnumber=&fgcli=&fg=0&` +
+    `sEcho=1&iColumns=9&iDisplayStart=0&iDisplayLength=5000`
+  ];
+
+  // Try each URL pattern
+  for (let i = 0; i < urls.length; i++) {
+    console.log(`\n🔍 Trying URL pattern ${i + 1}:`);
+    console.log(urls[i].substring(0, 100) + "...");
+
+    try {
+      const data = await request("GET", urls[i], null, {
+        "Referer": `${CONFIG.baseUrl}/agent/SMSCDRReports`,
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "application/json, text/javascript, */*; q=0.01"
+      });
+
+      // Check if response is HTML (login page)
+      if (data.includes("<html") || data.includes("<!DOCTYPE")) {
+        console.log("⚠️ Got HTML response -可能 login required or session expired");
+        continue;
+      }
+
+      // Try to parse JSON
+      try {
+        const jsonData = JSON.parse(data);
+        console.log(`✅ URL pattern ${i + 1} worked!`);
+        console.log(`📊 Data count: ${jsonData.aaData ? jsonData.aaData.length : 0}`);
+        return jsonData;
+      } catch (e) {
+        console.log(`❌ Invalid JSON from pattern ${i + 1}`);
+        console.log(`Raw response: ${data.substring(0, 200)}`);
+      }
+    } catch (error) {
+      console.log(`❌ Request failed for pattern ${i + 1}:`, error.message);
+    }
   }
 
-  return data;
-}
-
-/* ================= FIX SMS DATA ================= */
-function fixSMS(data) {
-  if (!data || !data.aaData) return data;
-
-  try {
-    data.aaData = data.aaData
-      .map(row => {
-        let message = String(row[5] || "")
-          .replace(/<[^>]+>/g, "")
-          .replace(/legendhacker/gi, "")
-          .replace(/&[^;]+;/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-
-        if (!message || message.length < 3) return null;
-
-        return [
-          String(row[0] || ""), // Date
-          String(row[1] || ""), // From
-          String(row[2] || ""), // Number
-          String(row[3] || ""), // Service
-          message,               // OTP
-          "$",                   // Currency
-          String(row[7] || "0")  // Cost
-        ];
-      })
-      .filter(Boolean);
-  } catch (e) {
-    console.error("Error fixing SMS:", e.message);
-  }
-
-  return data;
+  throw new Error("All SMS endpoints failed");
 }
 
 /* ================= FETCH NUMBERS ================= */
 async function getNumbers() {
-  console.log("📱 Fetching numbers...");
+  console.log("\n📱 Fetching numbers...");
 
   const url = `${CONFIG.baseUrl}/agent/res/data_smsnumbers.php?` +
-    `frange=&fclient=&sEcho=2&iColumns=8&` +
-    `sColumns=%2C%2C%2C%2C%2C%2C%2C&` +
     `iDisplayStart=0&iDisplayLength=-1&_=${Date.now()}`;
 
   const data = await request("GET", url, null, {
@@ -241,65 +275,72 @@ async function getNumbers() {
     "X-Requested-With": "XMLHttpRequest"
   });
 
-  return fixNumbers(safeJSON(data));
+  return safeJSON(data);
 }
 
-/* ================= FETCH SMS ================= */
-async function getSMS() {
-  console.log("📨 Fetching SMS...");
+/* ================= ROUTES ================= */
 
-  const today = new Date();
-  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+// Debug route - pehle yeh use karo
+app.get("/debug", async (req, res) => {
+  const results = {
+    steps: [],
+    cookies: [],
+    error: null
+  };
 
-  const url = `${CONFIG.baseUrl}/agent/res/data_smscdr.php?` +
-    `fdate1=${dateStr}%2000:00:00&fdate2=${dateStr}%2023:59:59&` +
-    `iDisplayLength=5000&_=${Date.now()}`;
+  try {
+    // Step 1: Check if website exists
+    results.steps.push({ name: "Website Check", status: "pending" });
+    const websiteCheck = await request("GET", CONFIG.baseUrl);
+    results.steps[0].status = websiteCheck.includes("timesms") ? "✅ Found" : "⚠️ Unknown";
+    
+    // Step 2: Check login page
+    results.steps.push({ name: "Login Page", status: "pending" });
+    const loginPage = await request("GET", `${CONFIG.baseUrl}/login`);
+    results.steps[1].status = loginPage.includes("login") ? "✅ Found" : "❌ Not Found";
+    
+    // Step 3: Try login
+    results.steps.push({ name: "Login Attempt", status: "pending" });
+    await login();
+    results.steps[2].status = `✅ Done (${cookies.length} cookies)`;
+    results.cookies = cookies;
+    
+    // Step 4: Check SMS endpoint
+    results.steps.push({ name: "SMS Endpoint", status: "pending" });
+    try {
+      const smsTest = await request("GET", `${CONFIG.baseUrl}/agent/res/data_smscdr.php`, null, {
+        "X-Requested-With": "XMLHttpRequest"
+      });
+      results.steps[3].status = smsTest.includes("aaData") ? "✅ Working" : "⚠️ Not Working";
+      results.smsPreview = smsTest.substring(0, 200);
+    } catch (e) {
+      results.steps[3].status = "❌ Failed";
+    }
 
-  const data = await request("GET", url, null, {
-    "Referer": `${CONFIG.baseUrl}/agent/SMSCDRReports`,
-    "X-Requested-With": "XMLHttpRequest"
-  });
+  } catch (error) {
+    results.error = error.message;
+  }
 
-  return fixSMS(safeJSON(data));
-}
-
-/* ================= HEALTH CHECK ================= */
-app.get("/health", (req, res) => {
-  res.json({ 
-    status: "healthy", 
-    timestamp: new Date().toISOString()
-  });
+  res.json(results);
 });
 
-/* ================= API ROUTES ================= */
-
-// Home route
+// Main route
 app.get("/", async (req, res) => {
-  const { type, username, password } = req.query;
-
-  if (username) CONFIG.username = username;
-  if (password) CONFIG.password = password;
+  const { type } = req.query;
 
   if (!type) {
     return res.json({
-      name: "timesms.net API",
-      version: "1.0.0",
-      status: "running",
-      endpoints: {
+      message: "timesms.net API",
+      usage: {
         numbers: "/?type=numbers",
         sms: "/?type=sms",
-        test: "/test",
-        health: "/health"
-      },
-      config: {
-        baseUrl: CONFIG.baseUrl,
-        username: CONFIG.username,
-        passwordSet: CONFIG.password ? "✅ Yes" : "❌ No"
+        debug: "/debug"
       }
     });
   }
 
   try {
+    // Pehle login karo
     await login();
 
     let result;
@@ -308,14 +349,12 @@ app.get("/", async (req, res) => {
     } else if (type === "sms") {
       result = await getSMS();
     } else {
-      return res.json({ error: "Invalid type. Use 'numbers' or 'sms'" });
+      return res.json({ error: "Invalid type" });
     }
 
     res.json({
       success: true,
       type: type,
-      url: CONFIG.baseUrl,
-      count: result.aaData ? result.aaData.length : 0,
       data: result,
       timestamp: new Date().toISOString()
     });
@@ -325,7 +364,7 @@ app.get("/", async (req, res) => {
       success: false,
       error: error.message,
       type: type,
-      url: CONFIG.baseUrl
+      debug: "Please try /debug first to see what's wrong"
     });
   }
 });
@@ -334,51 +373,24 @@ app.get("/", async (req, res) => {
 app.get("/test", async (req, res) => {
   try {
     const response = await request("GET", `${CONFIG.baseUrl}/login`);
-    
     res.json({
-      status: "✅ timesms.net is reachable",
-      url: CONFIG.baseUrl,
-      responseLength: response.length,
-      hasLoginForm: response.includes("login") || response.includes("Login")
+      status: response.includes("login") ? "✅ Working" : "⚠️ Unknown",
+      url: CONFIG.baseUrl
     });
   } catch (error) {
-    res.json({
-      status: "❌ timesms.net is not reachable",
-      url: CONFIG.baseUrl,
-      error: error.message
-    });
+    res.json({ status: "❌ Failed", error: error.message });
   }
 });
 
-// Update config route
-app.get("/update", (req, res) => {
-  const { url, username, password } = req.query;
-  
-  if (url) CONFIG.baseUrl = url;
-  if (username) CONFIG.username = username;
-  if (password) CONFIG.password = password;
-  
-  res.json({
-    success: true,
-    message: "Configuration updated",
-    currentConfig: {
-      baseUrl: CONFIG.baseUrl,
-      username: CONFIG.username,
-      passwordSet: CONFIG.password ? "Yes" : "No"
-    }
-  });
-});
-
-// Start server
 app.listen(PORT, () => {
   console.log(`
 ╔══════════════════════════════════════╗
-║     timesms.net API Server           ║
+║     timesms.net API (Debug Mode)     ║
 ╠══════════════════════════════════════╣
 ║  Port: ${PORT}                        
 ║  URL: ${CONFIG.baseUrl}  
-║  Username: ${CONFIG.username}          
-║  Status: ✅ Active                     
+║  Debug: /debug                       
+║  Test: /test                         
 ╚══════════════════════════════════════╝
   `);
 });
