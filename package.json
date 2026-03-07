@@ -1,12 +1,16 @@
 {
-  "name": "time-sms-api",
-  "version": "2.0.0",
-  "description": "Time SMS Panel API with OTP support",
+  "name": "timesms-api",
+  "version": "1.0.0",
+  "description": "TimeSMS Panel API",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "axios": "^1.6.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
