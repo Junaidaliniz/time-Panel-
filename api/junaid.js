@@ -1,6 +1,9 @@
+const express = require("express");
 const http = require("http");
 const zlib = require("zlib");
 const querystring = require("querystring");
+
+const router = express.Router();
 
 const CONFIG = {
   baseUrl: "http://www.timesms.net",
@@ -157,10 +160,11 @@ async function getNumbers() {
   return fixNumbers(safeJSON(data));
 }
 
-/* GET SMS */
+/* GET SMS - USING YOUR WIDE RANGE PATTERN */
 async function getSMS() {
   await login();
 
+  // Wide date range (your pattern)
   const startDate = "2026-03-07";
   const endDate = "2099-12-31";
 
@@ -174,13 +178,14 @@ async function getSMS() {
     `fnum=`,
     `fcli=`,
     `fg=0`,
-    `iDisplayLength=2000`
+    `iDisplayLength=2000`  // your suggested value
   ].join('&');
 
   const urlPath = `/agent/res/data_smscdr.php?${params}`;
 
   console.log("[SMS] Full URL:", CONFIG.baseUrl + urlPath);
 
+  // Load parent page first
   try {
     await makeRequest("GET", "/agent/SMSCDRReports", null, {
       Referer: `${CONFIG.baseUrl}/agent/`
@@ -198,6 +203,7 @@ async function getSMS() {
 
   console.log("[SMS RAW PREVIEW]", data.substring(0, 1000));
 
+  // Retry if blocked
   if (data.includes("Direct Script Access") || data.includes("Please sign in") || data.includes("login")) {
     console.log("[SMS] Blocked - retrying...");
     await login();
@@ -217,33 +223,20 @@ async function getSMS() {
   return result;
 }
 
-/* MAIN */
-async function main() {
-  const command = process.argv[2];
+/* ROUTE */
+router.get("/", async (req, res) => {
+  const { type } = req.query;
 
-  if (!command || !['numbers', 'sms'].includes(command)) {
-    console.log("Usage: node script.js [numbers|sms]");
-    console.log("  node script.js numbers    - Fetch SMS numbers");
-    console.log("  node script.js sms        - Fetch SMS messages");
-    process.exit(1);
-  }
+  if (!type) return res.json({ error: "Use ?type=numbers or ?type=sms" });
 
   try {
-    let result;
-    if (command === 'numbers') {
-      console.log("[TASK] Fetching numbers...");
-      result = await getNumbers();
-    } else if (command === 'sms') {
-      console.log("[TASK] Fetching SMS messages...");
-      result = await getSMS();
-    }
-
-    console.log("\n[RESULT]");
-    console.log(JSON.stringify(result, null, 2));
+    if (type === "numbers") return res.json(await getNumbers());
+    if (type === "sms") return res.json(await getSMS());
+    res.json({ error: "Invalid type" });
   } catch (err) {
     console.error("[ERROR]", err.message);
-    process.exit(1);
+    res.json({ error: err.message || "Failed" });
   }
-}
+});
 
-main();
+module.exports = router;
