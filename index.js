@@ -1,16 +1,14 @@
-const express = require("express");
+Const express = require("express");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- IMPORT ALL PANELS ---
 const junaid = require("./api/junaid");
-const ayan = require("./api/ayan");   // <--- Variable name sahi kar diya
-const ahmad = require("./api/ahmad"); // <--- Ahmad bhi add kar diya
+const ayan = require("./api/ayan");
 
 // --- ROUTES ---
 app.use("/api/junaid", junaid);
-app.use("/api/ayan", ayan);     // <--- Ab ye variable work karega
-app.use("/api/ahmad", ahmad);   // <--- Ahmad ka route bhi ready hai
+app.use("/api/ayan", ayan);
 
 // --- HEALTH CHECK ---
 app.get("/", (req,res)=> res.send("API RUNNING ✅"));
