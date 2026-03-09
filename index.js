@@ -5,10 +5,12 @@ const PORT = process.env.PORT || 3000;
 // --- IMPORT ALL PANELS ---
 const junaid = require("./api/junaid");
 const ayan = require("./api/ayan");
+const ahmad = require("./api/ahmad");
 
 // --- ROUTES ---
 app.use("/api/junaid", junaid);
 app.use("/api/ayan", ayan);
+app.use("/api/ahmad", ahmad);
 
 // --- HEALTH CHECK ---
 app.get("/", (req,res)=> res.send("API RUNNING ✅"));
