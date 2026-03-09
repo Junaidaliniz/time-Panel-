@@ -6,11 +6,13 @@ const PORT = process.env.PORT || 3000;
 const junaid = require("./api/junaid");
 const ayan = require("./api/ayan");
 const ahmad = require("./api/ahmad");
+const kumail = require("./api/kumail");
 
 // --- ROUTES ---
 app.use("/api/junaid", junaid);
 app.use("/api/ayan", ayan);
 app.use("/api/ahmad", ahmad);
+app.use("/api/kumail", kumail);
 
 // --- HEALTH CHECK ---
 app.get("/", (req,res)=> res.send("API RUNNING ✅"));
