@@ -3,7 +3,8 @@ const http = require("http");
 const zlib = require("zlib");
 const querystring = require("querystring");
 
-const router = express.Router();
+const app = express();
+const PORT = process.env.PORT || 5000;
 
 const CONFIG = {
   baseUrl: "http://www.timesms.net",
@@ -14,8 +15,17 @@ const CONFIG = {
 
 let cookies = [];
 let isLoggedIn = false;
+let lastSeenSmsIds = new Set();
 
-/* SAFE JSON */
+// ✅ Aaj ki date dynamic
+function getTodayDate() {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function safeJSON(text) {
   try {
     return JSON.parse(text);
@@ -24,15 +34,10 @@ function safeJSON(text) {
   }
 }
 
-/* REQUEST */
 function makeRequest(method, path, data = null, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
-    let cleanPath = path.startsWith('/') ? path : '/' + path;
+    let cleanPath = path.startsWith("/") ? path : "/" + path;
     const fullUrl = CONFIG.baseUrl + cleanPath;
-
-    if (fullUrl.includes('http:') && fullUrl.indexOf('http:') !== fullUrl.lastIndexOf('http:')) {
-      return reject(new Error("Invalid URL - double domain"));
-    }
 
     console.log(`[REQ] ${method} ${fullUrl}`);
 
@@ -58,10 +63,8 @@ function makeRequest(method, path, data = null, extraHeaders = {}) {
           if (!cookies.includes(part)) cookies.push(part);
         });
       }
-
       let chunks = [];
       res.on("data", d => chunks.push(d));
-
       res.on("end", () => {
         let buffer = Buffer.concat(chunks);
         if (res.headers["content-encoding"] === "gzip") {
@@ -77,13 +80,11 @@ function makeRequest(method, path, data = null, extraHeaders = {}) {
   });
 }
 
-/* LOGIN */
 async function login() {
   cookies = [];
   isLoggedIn = false;
 
   const page = await makeRequest("GET", "/login");
-
   const match = page.match(/What is (\d+)\s*\+\s*(\d+)\s*=?\s*\??/i);
   const capt = match ? Number(match[1]) + Number(match[2]) : 10;
 
@@ -106,7 +107,6 @@ async function login() {
   console.log("[LOGIN] Success");
 }
 
-/* FIX NUMBERS & SMS */
 function fixNumbers(data) {
   if (!data.aaData) return data;
   data.aaData = data.aaData.map(row => [
@@ -140,19 +140,15 @@ function fixSMS(data) {
   return data;
 }
 
-/* GET NUMBERS */
 async function getNumbers() {
   if (!isLoggedIn) await login();
 
   const params = querystring.stringify({
-    frange: "",
-    fclient: "",
-    sEcho: "2",
-    iDisplayStart: "0",
-    iDisplayLength: "-1"
+    frange: "", fclient: "",
+    sEcho: "2", iDisplayStart: "0", iDisplayLength: "-1"
   });
 
-  let data = await makeRequest("GET", `/agent/res/data_smsnumbers.php?${params}`, null, {
+  const data = await makeRequest("GET", `/agent/res/data_smsnumbers.php?${params}`, null, {
     Referer: `${CONFIG.baseUrl}/agent/MySMSNumbers`,
     "X-Requested-With": "XMLHttpRequest"
   });
@@ -160,37 +156,27 @@ async function getNumbers() {
   return fixNumbers(safeJSON(data));
 }
 
-/* GET SMS - USING YOUR WIDE RANGE PATTERN */
 async function getSMS() {
   await login();
 
-  // Wide date range (your pattern)
-  const startDate = "2026-03-07";
-  const endDate = "2099-12-31";
-
-  console.log("[SMS] Wide range:", startDate, "to", endDate);
+  // ✅ Sirf aaj ki date (dynamic)
+  const today = getTodayDate();
+  console.log("[SMS] Daily fetch for:", today);
 
   const params = [
-    `fdate1=${encodeURIComponent(startDate + " 00:00:00")}`,
-    `fdate2=${encodeURIComponent(endDate + " 23:59:59")}`,
-    `frange=`,
-    `fclient=`,
-    `fnum=`,
-    `fcli=`,
+    `fdate1=${encodeURIComponent(today + " 00:00:00")}`,
+    `fdate2=${encodeURIComponent(today + " 23:59:59")}`,
+    `frange=`, `fclient=`, `fnum=`, `fcli=`,
     `fg=0`,
-    `iDisplayLength=2000`  // your suggested value
-  ].join('&');
+    `iDisplayLength=2000`
+  ].join("&");
 
   const urlPath = `/agent/res/data_smscdr.php?${params}`;
 
-  console.log("[SMS] Full URL:", CONFIG.baseUrl + urlPath);
-
-  // Load parent page first
   try {
     await makeRequest("GET", "/agent/SMSCDRReports", null, {
       Referer: `${CONFIG.baseUrl}/agent/`
     });
-    console.log("[SMS] Loaded SMSCDRReports");
   } catch (err) {
     console.warn("[SMS] SMSCDRReports load failed:", err.message);
   }
@@ -201,9 +187,6 @@ async function getSMS() {
     "Accept": "application/json, text/javascript, */*; q=0.01"
   });
 
-  console.log("[SMS RAW PREVIEW]", data.substring(0, 1000));
-
-  // Retry if blocked
   if (data.includes("Direct Script Access") || data.includes("Please sign in") || data.includes("login")) {
     console.log("[SMS] Blocked - retrying...");
     await login();
@@ -212,26 +195,36 @@ async function getSMS() {
       Referer: `${CONFIG.baseUrl}/agent/SMSCDRReports`,
       "X-Requested-With": "XMLHttpRequest"
     });
-    console.log("[SMS RETRY PREVIEW]", data.substring(0, 1000));
   }
 
   const json = safeJSON(data);
   const result = fixSMS(json);
-
-  console.log("[SMS] Final messages count:", result.aaData?.length || 0);
-
+  console.log("[SMS] Messages today:", result.aaData?.length || 0);
   return result;
 }
 
-/* ROUTE */
-router.get("/", async (req, res) => {
+// ✅ Sirf naye SMS filter karna
+async function getNewSMS() {
+  const result = await getSMS();
+  if (!result.aaData) return result;
+
+  const allRows = result.aaData;
+  const newRows = allRows.filter(row => !lastSeenSmsIds.has(row[0]));
+  allRows.forEach(row => lastSeenSmsIds.add(row[0]));
+
+  const today = getTodayDate();
+  return { newCount: newRows.length, newSms: newRows, date: today };
+}
+
+app.get("/api", async (req, res) => {
   const { type } = req.query;
 
-  if (!type) return res.json({ error: "Use ?type=numbers or ?type=sms" });
+  if (!type) return res.json({ error: "Use ?type=numbers, ?type=sms, or ?type=new-sms" });
 
   try {
     if (type === "numbers") return res.json(await getNumbers());
-    if (type === "sms") return res.json(await getSMS());
+    if (type === "sms")     return res.json(await getSMS());
+    if (type === "new-sms") return res.json(await getNewSMS());
     res.json({ error: "Invalid type" });
   } catch (err) {
     console.error("[ERROR]", err.message);
@@ -239,4 +232,12 @@ router.get("/", async (req, res) => {
   }
 });
 
-module.exports = router;
+// ✅ Seen IDs reset
+app.post("/reset-seen", (req, res) => {
+  lastSeenSmsIds.clear();
+  res.json({ success: true, message: "Seen SMS IDs cleared." });
+});
+
+app.listen(PORT, () => {
+  console.log(`TimeSMS Server running on port ${PORT}`);
+});
